@@ -14,7 +14,7 @@ const { alreadyConnectedWallets, connectWallet, connectedWallet } =
   useOnboard();
 
 const addresses = {
-  OBM: import.meta.env.VITE_OBM ?? "0x6b39b761b1b64C8C095BF0e3Bb0c6a74705b4788",
+  OBM: import.meta.env.VITE_OBM ?? "0xF4c969714dE2face138DC6055D77D4D6436dB59D",
   BAYC: "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D",
   MAKERDAOMULTICALL: "0xeefBa1e63905eF1D7ACbA5a8513c70307C1cE441",
 };
