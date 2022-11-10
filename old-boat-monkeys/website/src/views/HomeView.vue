@@ -236,9 +236,13 @@ td {
       </p>
       <p>
         How it works is simple: we use
-        <a href="https://relicprotocol.com">Relic</a> to prove your historic
+        <a href="https://relicprotocol.com" target="_blank">Relic</a> to prove your historic
         ownership of unexcited barge baboon NFTs. For each one that you have
         owned in the past, you will be issued a single Old Boat Monkey NFT.
+      </p>
+      <p>
+        You can also check out our awesome source code on
+        <a href="https://github.com/Relic-Protocol/relic-examples" target="_blank">GitHub</a>.
       </p>
     </div>
     <div v-if="connectedWallet">
