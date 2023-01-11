@@ -161,12 +161,12 @@ const mint = async (token) => {
 
   let proveTx;
   try {
-    proveTx = await prover.prove(
-      token.blockNumber,
-      addresses.BAYC,
-      storageSlot,
-      primaryAddress.value
-    );
+    proveTx = await prover.prove({
+      block: token.blockNumber,
+      account: addresses.BAYC,
+      slot: storageSlot,
+      expected: primaryAddress.value
+    });
   } catch (e) {
     alert(
       "storage slot mismatch (did you hold the NFT at the end of the block?)"

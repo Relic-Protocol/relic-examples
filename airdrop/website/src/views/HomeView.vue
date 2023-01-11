@@ -65,11 +65,11 @@ const refreshStatus = async () => {
       const prover = await client.storageSlotProver();
       const storageSlot = utils.mapElemSlot(MAP_SLOT, primaryAddress.value);
 
-      const proveTx = await prover.prove(
-        BLOCK,
-        addresses.USDT,
-        storageSlot,
-      );
+      const proveTx = await prover.prove({
+        block: BLOCK,
+        account: addresses.USDT,
+        slot: storageSlot,
+      });
 
       const mintTx = await adusdt.populateTransaction.mint(primaryAddress.value);
       const balanceTx = await adusdt.populateTransaction.balanceOf(primaryAddress.value);
