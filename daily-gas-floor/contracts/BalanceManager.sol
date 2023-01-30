@@ -10,7 +10,7 @@ pragma solidity >=0.8.0;
  *         linked list. Depositors are charged for claims using a round-robin.
  */
 contract BalanceManager {
-    uint256 public constant MIN_DEPOSIT = 1 ether / 100;
+    uint256 public constant MIN_DEPOSIT = 1 ether / 10;
 
     struct DepositNode {
         address next;
@@ -60,7 +60,10 @@ contract BalanceManager {
         require(prev != address(0), "Unexpected: no active depositors");
         address cur = nodes[prev].next;
 
-        while (amount > 0) {
+        // loop until the amount is fully claimed, or no depositors remain
+        // note that unclaimedBalance() may be higher than the sum of deposits
+        // due to potential unavoidable donations (e.g. via selfdestruct)
+        while (amount > 0 && prev != address(0)) {
             DepositNode memory node = nodes[cur];
 
             if (node.balance <= amount) {
@@ -72,10 +75,6 @@ contract BalanceManager {
                 if (node.next == cur) {
                     // only one node, just reset to empty list
                     prev = address(0);
-                    require(
-                        amount == 0,
-                        "Unexpected: No nodes left to fulfill claim"
-                    );
                 } else {
                     // unlink current node
                     nodes[prev].next = node.next;

@@ -1,12 +1,10 @@
 import { expect } from 'chai'
 import { ethers } from 'hardhat'
-import { arrayify, concat, defaultAbiCoder, sha256,
-    solidityPack, ParamType, RLP
-} from 'ethers/lib/utils'
 
-import { RelicClient } from '../packages/client/src'
+import { RelicClient } from '@relicprotocol/client'
 
-import pLimit from 'p-limit'
+const pLimit = require('p-limit')
+
 const limit = pLimit(16)
 const flatCache = require('flat-cache')
 
@@ -15,132 +13,6 @@ const BLOCK_HEADER_PROVER_ADDRESS = '0x9f9A1eb0CF9340538297c853915DCc06Eb6D72c4'
 const GWEI = ethers.BigNumber.from("1000000000")
 const ETHER = GWEI.mul(GWEI)
 const CHUNK_SIZE = 8192
-
-const MERKLE_PROOF_TYPE = 0
-const SNARK_PROOF_TYPE = 1
-
-function range(N) {
-    return [...new Array(N).keys()]
-}
-
-async function getHeader(provider, blockNum) {
-    return await provider.send("eth_getBlockByNumber", ["0x" + blockNum.toString(16), false])
-}
-
-function headerRlp(header) {
-    let list = [
-        header.parentHash,
-        header.sha3Uncles,
-        header.miner,
-        header.stateRoot,
-        header.transactionsRoot,
-        header.receiptsRoot,
-        header.logsBloom,
-        header.difficulty,
-        header.number,
-        header.gasLimit,
-        header.gasUsed,
-        header.timestamp,
-        header.extraData,
-        header.mixHash,
-        header.nonce,
-    ]
-    if (header.baseFeePerGas) {
-        list.push(header.baseFeePerGas)
-    }
-
-    list = list.map((v) => {
-        if (v == "0x0") {
-            return "0x"
-        }
-        if (v.length % 2 == 0) {
-            return v
-        } else {
-            return "0x0" + v.substring(2)
-        }
-    })
-    return RLP.encode(list)
-}
-
-function buildMerkleProof(hashes, idx) {
-    let count = hashes.length
-    let temp = new Array(count / 2)
-    let proof = new Array()
-    for (let i = 0; i < count; i += 2) {
-        if (idx == i) {
-            proof.push(hashes[i + 1])
-        } else if (idx == i + 1) {
-            proof.push(hashes[i])
-        }
-        temp[i >> 1] = sha256(concat([hashes[i], hashes[i + 1]]))
-    }
-    idx >>= 1
-    count >>= 1
-    while (count > 1) {
-        for (let i = 0; i < count; i += 2) {
-            if (idx == i) {
-                proof.push(temp[i + 1])
-            } else if (idx == i + 1) {
-                proof.push(temp[i])
-            }
-            temp[i >> 1] = sha256(concat([temp[i], temp[i + 1]]))
-        }
-        count >>= 1
-        idx >>= 1
-    }
-    return proof
-}
-
-function buildMerkleRoot(hashes) {
-    let count = hashes.length
-    let temp = new Array(count / 2)
-    for (let i = 0; i < count; i += 2) {
-        temp[i >> 1] = sha256(concat([hashes[i], hashes[i + 1]]))
-    }
-    count >>= 1
-    while (count > 1) {
-        for (let i = 0; i < count; i += 2) {
-            temp[i >> 1] = sha256(concat([temp[i], temp[i + 1]]))
-        }
-        count >>= 1
-    }
-    return temp[0]
-}
-
-function encodeValidBlockMerkleProof(wrap, merkle) {
-    let writer = defaultAbiCoder._getWriter()
-    let type = ParamType.from("bytes32[]")
-    defaultAbiCoder._getCoder(type).encode(writer, merkle)
-    let proof = writer.data
-    if (wrap) return solidityPack(["uint8", "bytes"], [MERKLE_PROOF_TYPE, proof])
-    return proof
-}
-
-async function getBlockHashes(startBlock, numBlocks) {
-    const cache = flatCache.load('block-hashes')
-    const result = await Promise.all(range(numBlocks).map((i) => limit(async () => {
-        let blockNum = startBlock+i
-        if (!cache.getKey(blockNum)) {
-            try {
-                let block = await ethers.provider.getBlock(blockNum)
-                cache.setKey(blockNum, block.hash)
-            } catch (e) {
-                cache.save(true);
-                throw e;
-            }
-        }
-        return cache.getKey(blockNum)
-    })))
-    cache.save(true)
-    return result
-}
-
-async function getMerkleProof(blockNum) {
-    const idx = blockNum % CHUNK_SIZE
-    const start = blockNum - idx
-    const hashes = await getBlockHashes(start, CHUNK_SIZE)
-    return encodeValidBlockMerkleProof(true, buildMerkleProof(hashes, idx))
-}
 
 describe('BalanceManager', function () {
   it('test linked list', async function () {
@@ -210,7 +82,7 @@ describe('BalanceManager', function () {
       }
     }
 
-    let users = range(4).map(v => {
+    let users = [1,2,3,4].map(v => {
       let val = (v + 1).toString(16)
       return '0x' + '0'.repeat(40 - val.length) + val
     })
@@ -240,42 +112,46 @@ describe('DailyGasFloor', function () {
   it('test rewards and settlement', async function () {
     const DailyGasFloor = await ethers.getContractFactory('DailyGasFloor')
     const dgf = await DailyGasFloor.deploy(
-        RELIQUARY_ADDRESS, BLOCK_HEADER_PROVER_ADDRESS
+        RELIQUARY_ADDRESS
     )
     await dgf.deployed()
 
-    let bond = await dgf.bond()
+    const relic = await RelicClient.fromProvider(ethers.provider)
+
+    let proveFee = await relic.reliquary.getFee(BLOCK_HEADER_PROVER_ADDRESS)
 
     let round = await dgf.previousRound()
     let tx = await dgf.deposit({ value: ETHER })
     await tx.wait()
 
     await expect(
-        dgf.settledFloorPrice(round)
+        dgf.settledPrice(round)
     ).to.be.revertedWith("round is not yet settled")
 
-    let blockNum = round * CHUNK_SIZE + 2
-    let header = headerRlp(await getHeader(ethers.provider, blockNum))
-    let proof = await getMerkleProof(blockNum)
-    function encodeProof(header, proof) {
-        return defaultAbiCoder.encode(["bytes", "bytes"], [header, proof])
-    }
-    tx = await dgf.submit(encodeProof(header, proof), { value: bond })
+    // fetch two sample blocks, find which has lower base fee
+    let blocks: Array<ethers.Block> = await Promise.all(
+      [round * CHUNK_SIZE, round * CHUNK_SIZE + 1].map(ethers.provider.getBlock)
+    )
+    let max = Number(blocks[0].baseFeePerGas.lt(blocks[1].baseFeePerGas))
 
-    blockNum++
-    header = headerRlp(await getHeader(ethers.provider, blockNum))
-    proof = await getMerkleProof(blockNum)
-    tx = await dgf.submit(encodeProof(header, proof), { value: bond })
+    // submit the higher base fee block
+    let data = await relic.blockHeaderProver.getProofData({block: blocks[max].number})
+    tx = await dgf.submit(BLOCK_HEADER_PROVER_ADDRESS, data.proof, { value: proveFee })
+
+    // now submit the lower base fee block
+    data = await relic.blockHeaderProver.getProofData({block: blocks[1-max].number})
+    tx = await dgf.submit(BLOCK_HEADER_PROVER_ADDRESS, data.proof, { value: proveFee })
+
     await tx.wait()
 
     await expect(
-        dgf.settledFloorPrice(round)
+        dgf.settledPrice(round)
     ).to.be.revertedWith("round is not yet settled")
 
     await hre.network.provider.send("hardhat_mine", ["0x2000"])
 
     // should succeed now
-    await dgf.settledFloorPrice(round)
+    await dgf.settledPrice(round)
 
     // should be able to claim reward
     await dgf.claimRewards([round])
