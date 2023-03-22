@@ -11,7 +11,8 @@ const addresses = {
   ADUSDT:
     import.meta.env.VITE_ADUSDT ?? "0xc2Ed14521e009FDe80FC610375769E0C292FC12d",
   USDT: "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-  MAKERDAOMULTICALL: "0xeefBa1e63905eF1D7ACbA5a8513c70307C1cE441",
+  STORAGE_SLOT_PROVER: "0xB8E9ebd4518E44eE66808ab27c9E09E5c5CCA2db",
+  CACHED_STORAGE_SLOT_PROVER: "0x2e1A0F428624D85c2c86be18ccf57981b3e9b54D",
 };
 const MAP_SLOT = 2;
 const BLOCK = 15_000_000;
@@ -19,28 +20,23 @@ const BLOCK = 15_000_000;
 const loaded = ref(false);
 const claimed = ref(null);
 const balance = ref(null);
-const eligible = ref(null);
-var proveAndMintTx = null;
-
-const ADUSDT = new ethers.Contract(addresses.ADUSDT, [
-  "function mint(address who) public",
-  "function balanceOf(address owner) public view returns (uint)",
-  "function claimed(address owner) public view returns (bool)",
-]);
-
-const USDT = new ethers.Contract(addresses.USDT, [
-  "function balanceOf(address owner) public view returns (uint)",
-]);
-
-const Multicall = new ethers.Contract(addresses.MAKERDAOMULTICALL, [
-  "function aggregate(tuple(address target, bytes callData)[] memory calls) public returns (uint256 blockNumber, bytes[] memory returnData)",
-]);
+const txValue = ref({});
 
 const provider = computed(() => {
   return new ethers.providers.Web3Provider(connectedWallet.value.provider);
 });
 
 const signer = computed(() => provider.value.getSigner());
+
+const ADUSDT = computed(() => new ethers.Contract(addresses.ADUSDT, [
+  "function proveAndMint(address who, address prover, bytes calldata proof) public payable returns (uint256)",
+  "function balanceOf(address owner) public view returns (uint)",
+  "function claimed(address owner) public view returns (bool)",
+], signer.value));
+
+const USDT = computed(() => new ethers.Contract(addresses.USDT, [
+  "function balanceOf(address owner) public view returns (uint)",
+], signer.value));
 
 const primaryAddress = computed(() => {
   const wallet = connectedWallet.value;
@@ -50,62 +46,122 @@ const primaryAddress = computed(() => {
   return ethers.utils.getAddress(connectedWallet.value.accounts[0].address);
 });
 
+const getEntitledAmount = async (address) => {
+  try {
+    return await USDT.value.balanceOf(address, { blockTag: BLOCK });
+  } catch (e) {
+    alert("Cannot query historic balance:" + e.reason);
+    console.log(e);
+    return undefined;
+  }
+};
+
+/*
+ * determine if we can used a cached storage prover for cheaper
+ * proving costs. Otherwise use the normal storage slot prover.
+ */
+const getBestProver = async (client) => {
+  const rootdata = await client.accountStorageProver.getProofData(
+    { block: BLOCK, account: addresses.USDT }
+  );
+  const rootFactSig = utils.toFactSignature(0, rootdata.sigData);
+  const rootStorage = await client.reliquary.getFact(addresses.USDT, rootFactSig);
+
+  if (rootStorage.exists) {
+    console.log("Using cached storage slot prover");
+    return {
+      prover: client.cachedStorageSlotProver,
+      proverAddress: addresses.CACHED_STORAGE_SLOT_PROVER,
+    };
+  } else {
+    console.log(
+      "Using uncached storage slot prover; " +
+      "consider caching storage root for gas efficiency"
+    );
+    return {
+      prover: client.storageSlotProver,
+      proverAddress: addresses.STORAGE_SLOT_PROVER,
+    }
+  }
+}
+
+// generate and test the proof of our balance
+const generateClaim = async () => {
+  const address = primaryAddress.value;
+  const client = await RelicClient.fromProvider(provider.value);
+  const storageSlot = utils.mapElemSlot(MAP_SLOT, address);
+
+  // fetch historic USDT balance, which we expect to prove
+  const expected = await getEntitledAmount(address);
+
+  // use appropriate prover (cached or uncached)
+  const { prover, proverAddress } = await getBestProver(client);
+
+  // fetch proof of the storage slot value
+  const proofData = await prover.getProofData({
+    block: BLOCK,
+    account: addresses.USDT,
+    slot: storageSlot,
+    expected: expected
+  });
+
+  // any applicable fee for the prover
+  let proveFee = await client.reliquary.getFee(proverAddress)
+  // return arguments for the proveAndMint function
+  return [
+    address,
+    proverAddress,
+    proofData.proof,
+    { value: proveFee }
+  ];
+}
+
 const refreshStatus = async () => {
   const address = primaryAddress.value;
   if (address === null) {
     return;
   }
+
+  // determine current account status
   try {
-    const adusdt = ADUSDT.connect(signer.value);
-    claimed.value = await adusdt.claimed(address);
-    balance.value = await adusdt.balanceOf(address);
-
-    if (!claimed.value) {
-      const client = await RelicClient.fromProvider(provider.value);
-      const prover = await client.storageSlotProver();
-      const storageSlot = utils.mapElemSlot(MAP_SLOT, primaryAddress.value);
-
-      const proveTx = await prover.prove({
-        block: BLOCK,
-        account: addresses.USDT,
-        slot: storageSlot,
-      });
-
-      const mintTx = await adusdt.populateTransaction.mint(primaryAddress.value);
-      const balanceTx = await adusdt.populateTransaction.balanceOf(primaryAddress.value);
-
-      // simulate the call and run balanceOf afterwards to determine how much
-      // would be minted
-      const multicall = Multicall.connect(signer.value);
-      proveAndMintTx = [
-        { target: proveTx.to, callData: proveTx.data },
-        { target: mintTx.to, callData: mintTx.data },
-      ]
-
-      const res = await multicall.callStatic.aggregate([
-        ...proveAndMintTx,
-        { target: balanceTx.to, callData: balanceTx.data },
-      ])
-
-      // balance after we minted minus current balance = amount we will mint
-      eligible.value = ethers.BigNumber.from(res.returnData[2]) - balance.value;
-    }
-    loaded.value = true;
+    claimed.value = await ADUSDT.value.claimed(address);
+    balance.value = await ADUSDT.value.balanceOf(address);
   } catch (e) {
-    console.log("load status error", e);
+    alert(e.reason);
+    console.log(e);
   }
+
+  // if unclaimed, generate and simulate a claim
+  if (!claimed.value) {
+    try {
+      const args = await generateClaim();
+      const res = await ADUSDT.value.callStatic.proveAndMint(...args);
+      txValue.value = { expected: res, args: args };
+    } catch (e) {
+      if (e.name == "RelicError") {
+        alert("Relic API error: " + e.message);
+      } else {
+        alert(e.reason);
+      }
+      console.log(e);
+    }
+  }
+  loaded.value = true;
 };
 
+// perform the actual proof and mint on chain
 const mint = async () => {
-  if (loaded.value) {
-    // run the saved, bundled proving and minting TX
-    const multicall = Multicall.connect(signer.value);
-    const res = await multicall.aggregate(proveAndMintTx);
-
-    await res.wait();
+  if (txValue.value.args) {
+    try {
+      const res = await ADUSDT.value.proveAndMint(...txValue.value.args);
+      await res.wait();
+    } catch (e) {
+      alert(e.reason);
+      console.log(e);
+    } finally {
+      refreshStatus();
+    }
   }
-
-  refreshStatus();
 };
 
 watchEffect(refreshStatus);
@@ -145,8 +201,10 @@ if (alreadyConnectedWallets.value.length) {
       <p><b>Primary Account:</b> {{ primaryAddress }}</p>
       <text v-if="!loaded">Checking claim status</text>
       <div v-else>
-        <button v-if="!claimed" @click="mint()" :disabled="eligible == 0" autocomplete="off">
-          Mint {{ eligible / 1e6 }} ADUSDT
+        <button v-if="!claimed" @click="mint()" :disabled="txValue.expected == 0" autocomplete="off">
+          Mint {{
+            txValue.expected / 1e6
+          }} ADUSDT
         </button>
         <text v-else>(Already claimed)</text>
         <br />

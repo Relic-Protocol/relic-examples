@@ -19,7 +19,7 @@
     "wretch": "^2.1.5"
   },
   "devDependencies": {
-    "@relicprotocol/client": "^0.0.4",
+    "@relicprotocol/client": "^0.0.5",
     "@rushstack/eslint-patch": "^1.1.4",
     "@vitejs/plugin-vue": "^3.0.3",
     "@vue/eslint-config-prettier": "^7.0.0",

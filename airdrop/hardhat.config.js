@@ -1,6 +1,6 @@
 require("@nomiclabs/hardhat-waffle");
-require('hardhat-dependency-compiler');
 require('dotenv').config();
+require("hardhat-gas-reporter");
 
 
 // You need to export an object to set up your config
@@ -24,12 +24,8 @@ module.exports = {
       chainId: 1,
       forking: {
         url: `https://eth-mainnet.alchemyapi.io/v2/${process.env.ALCHEMY_KEY}`,
+        blockNumber: 16490000,
       }
     }
-  },
-  dependencyCompiler: {
-    paths: [
-      '@relicprotocol/contracts/interfaces/IStorageSlotProver.sol',
-    ],
   }
 };

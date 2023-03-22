@@ -14,32 +14,22 @@ const provider = computed(() => {
 
 const signer = computed(() => provider.value.getSigner());
 
-const primaryAddress = computed(() => {
-    const wallet = connectedWallet.value;
-    if (wallet === null || wallet.accounts.length === 0) {
-        return null;
-    }
-    return ethers.utils.getAddress(connectedWallet.value.accounts[0].address);
-});
-
 const contract = ref("");
 const owner = ref("");
 const slot = ref(null);
 
 const guessSlot = async function () {
-    console.log(contract.value);
     const ERC20 = new ethers.Contract(contract.value, [
         "function balanceOf(address owner) public view returns (uint)",
-    ]);
+    ], signer.value);
     const block = await provider.value.getBlockNumber();
 
     var balance;
     try {
-        balance = await ERC20.connect(signer.value).balanceOf(owner.value, {
-            blockTag: block,
-        });
-    } catch (error) {
-        alert("Could not call balanceOf, are you sure the contract address is an ERC-20 token?");
+        balance = await ERC20.balanceOf(owner.value, { blockTag: block });
+    } catch (e) {
+        alert("Could not call balanceOf on contract: " + e.reason);
+        console.log(e);
         slot.value = -1;
         return;
     }
@@ -48,12 +38,14 @@ const guessSlot = async function () {
         slot.value = -1;
         return;
     }
-    console.log("balance", balance);
     let found = false;
     for (let i = 0; i < 30; i++) {
-        let val = await provider.value.getStorageAt(contract.value, utils.mapElemSlot(i, owner.value), block);
+        let val = await provider.value.getStorageAt(
+            contract.value,
+            utils.mapElemSlot(i, owner.value),
+            block,
+        );
         if (parseInt(val) == balance) {
-            console.log("hit at ", i);
             slot.value = i;
             found = true;
         }
@@ -99,7 +91,7 @@ if (alreadyConnectedWallets.value.length) {
             <input v-model="owner" size="50" />
             <br />
             <br />
-            <button @click="guessSlot()" autocomplete="off">Guess Slot</button>
+            <button @click="guessSlot()" :disabled="!connectedWallet" autocomplete="off">Guess Slot</button>
 
             <div v-if="slot != null && slot >= 0">
                 <text>Plausible slot found at {{ slot }}</text>
@@ -108,7 +100,7 @@ if (alreadyConnectedWallets.value.length) {
                 <br />
                 <text>Solidity
                     code:
-                </text><code>Storage.mapElemSlot(bytes32(uint({{slot}})), bytes32(uint256(uint160(owner_address))) )</code>
+                </text><code>Storage.mapElemSlot(bytes32(uint({{ slot }})), bytes32(uint256(uint160(owner_address))) )</code>
             </div>
             <div v-else-if="slot != null && slot < 0">
                 <text>No matching slot found</text>
